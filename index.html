@@ -303,9 +303,16 @@ nav.scrolled{box-shadow:var(--shadow)}
 .lib-status-text strong{display:block;color:#fff;font-size:.95rem;font-weight:700}
 .lib-status-text span{font-size:.8rem;color:rgba(255,255,255,.5)}
 .lib-tier-badge{background:rgba(255,255,255,.1);color:var(--cyan);border-radius:50px;padding:6px 16px;font-size:.78rem;font-weight:700}
-.lib-pdf-frame{width:100%;height:720px;border:1px solid rgba(255,255,255,.12);border-radius:14px;background:#fff}
-.lib-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:20px;justify-content:center}
+.lib-playbook-card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);border-radius:var(--r-lg);padding:52px 40px;text-align:center}
+.lib-playbook-icon{width:80px;height:80px;border-radius:20px;background:linear-gradient(145deg,var(--electric),var(--cyan));display:flex;align-items:center;justify-content:center;font-size:2rem;color:#fff;margin:0 auto 24px}
+.lib-playbook-card h3{font-family:'Instrument Serif',serif;font-weight:400;font-size:2rem;color:#fff;margin-bottom:14px}
+.lib-playbook-card > p{font-size:.95rem;color:rgba(255,255,255,.6);line-height:1.75;max-width:480px;margin:0 auto 28px}
+.lib-playbook-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.lib-playbook-hint{margin-top:18px;font-size:.78rem;color:rgba(255,255,255,.35)}
+.lib-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:24px;justify-content:center}
 .lib-signin-note{margin-top:20px;font-size:.82rem;color:rgba(255,255,255,.4)}
+.lib-recheck-btn{background:none;border:none;color:var(--cyan);font-family:'Syne',sans-serif;font-weight:600;font-size:.82rem;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.lib-recheck-btn:hover{text-decoration:underline}
 
 /* ═══════════════ TESTIMONIALS ═══════════════ */
 #testimonials{padding:100px 0;background:var(--paper)}
@@ -963,6 +970,7 @@ footer ul li a:hover{color:#fff}
       <p id="libLockedMsg">Choose a plan below to get full access to the complete PLAB 2 Playbook by Dr. Sampson Owhin — 100 stations across 9 specialties.</p>
       <button class="btn btn-electric btn-lg" onclick="scrollToSection('pricing')"><i class="fas fa-unlock"></i>&nbsp; View plans &amp; unlock</button>
       <p class="lib-signin-note" id="libSigninNote"></p>
+      <p style="margin-top:14px"><button class="lib-recheck-btn" onclick="recheckAccess()"><i class="fas fa-rotate"></i> Already paid? Refresh my access</button></p>
     </div>
 
     <!-- Unlocked state (subscribed) -->
@@ -977,9 +985,19 @@ footer ul li a:hover{color:#fff}
         </div>
         <div class="lib-tier-badge" id="libTierBadge">Subscribed</div>
       </div>
-      <iframe class="lib-pdf-frame" id="libPdfFrame" title="PLAB 2 Playbook" src=""></iframe>
+
+      <div class="lib-playbook-card">
+        <div class="lib-playbook-icon"><i class="fas fa-book-medical"></i></div>
+        <h3>PLAB 2 Playbook — 100 Stations</h3>
+        <p>Your complete station bank by Dr. Sampson Owhin. History taking, model answers, common pitfalls, and examiner scoring for all 100 cases across 9 specialties.</p>
+        <div class="lib-playbook-actions">
+          <a class="btn btn-electric btn-lg" href="plab2-playbook.pdf" target="_blank" rel="noopener"><i class="fas fa-book-open"></i>&nbsp; Open the Playbook</a>
+          <a class="btn btn-ghost" href="plab2-playbook.pdf" download><i class="fas fa-download"></i>&nbsp; Download PDF</a>
+        </div>
+        <p class="lib-playbook-hint">Opens in a new tab · 310 pages · yours for the full subscription period</p>
+      </div>
+
       <div class="lib-actions">
-        <a class="btn btn-electric" id="libOpenBtn" href="plab2-playbook.pdf" target="_blank" rel="noopener"><i class="fas fa-external-link-alt"></i>&nbsp; Open full-screen</a>
         <button class="btn btn-ghost" onclick="scrollToSection('demo')"><i class="fas fa-dumbbell"></i>&nbsp; Practice interactive stations</button>
       </div>
     </div>
@@ -1188,9 +1206,42 @@ let currentUser = null;
 
 async function refreshAuthUI(){
   if(!supabaseClient) return;
-  const { data } = await supabaseClient.auth.getUser();
-  currentUser = data?.user || null;
-  updateNavForAuth();
+  try {
+    // getSession() reads the stored session synchronously-ish and is the most
+    // reliable source right after load / OAuth redirect.
+    const { data: sessionData } = await supabaseClient.auth.getSession();
+    let user = sessionData?.session?.user || null;
+
+    // If we have a session, also pull the freshest user record so metadata
+    // changed server-side (e.g. a new subscription) is reflected without a manual refresh.
+    if(user){
+      try {
+        const { data: userData } = await supabaseClient.auth.getUser();
+        if(userData?.user) user = userData.user;
+      } catch(e){ /* keep session user if getUser fails */ }
+    }
+
+    currentUser = user;
+    updateNavForAuth();
+  } catch(err) {
+    console.error('Auth refresh error:', err);
+  }
+}
+
+async function recheckAccess(){
+  if(!supabaseClient) return;
+  showToast('Checking your access...', 'fas fa-rotate');
+  try {
+    // Force-refresh the session so any newly-added subscription metadata loads
+    await supabaseClient.auth.refreshSession();
+  } catch(e){ /* ignore, fall through to refresh */ }
+  await refreshAuthUI();
+  const tier = getUserTier();
+  if(tier){
+    showToast('Access unlocked — enjoy!', 'fas fa-circle-check');
+  } else {
+    showToast('No active plan found yet. If you just paid, give it a minute.', 'fas fa-circle-info');
+  }
 }
 
 function updateNavForAuth(){
@@ -1253,10 +1304,6 @@ function updateLibrary(){
       unlocked.style.display = 'block';
       document.getElementById('libTierBadge').textContent = TIER_LABELS[tier];
       document.getElementById('libAccessSpan').textContent = `${TIER_LABELS[tier]} · all 100 stations`;
-      const frame = document.getElementById('libPdfFrame');
-      if(frame && !frame.src.includes('plab2-playbook.pdf')){
-        frame.src = 'plab2-playbook.pdf#toolbar=1&view=FitH';
-      }
     } else {
       // Logged in but not paid → locked
       locked.style.display = 'block';
@@ -2264,11 +2311,22 @@ loadStation('Medicine');
 if(supabaseClient){
   // Check current session on load (and after OAuth redirect back)
   refreshAuthUI();
-  // React to login/logout events live
+
+  // React to login/logout events live. On any auth event, do a full robust
+  // refresh (which re-fetches fresh user metadata) rather than trusting the
+  // possibly-stale session object — this prevents the "no active plan" flash.
   supabaseClient.auth.onAuthStateChange((event, session) => {
-    currentUser = session?.user || null;
-    updateNavForAuth();
+    if(session?.user){
+      refreshAuthUI();
+    } else {
+      currentUser = null;
+      updateNavForAuth();
+    }
   });
+
+  // Safety net: a second check shortly after load catches any case where the
+  // session wasn't ready on the first pass (avoids needing a manual refresh).
+  setTimeout(() => { if(supabaseClient) refreshAuthUI(); }, 1200);
 }
 </script>
 </body>
