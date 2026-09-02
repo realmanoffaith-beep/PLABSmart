@@ -1511,6 +1511,9 @@ function escapeHtml(t){
 let currentQuiz = null;
 let quizAnswers = {};
 
+// Your Supabase Edge Function that securely calls Groq (key hidden server-side)
+const QUIZ_FUNCTION_URL = 'https://bpcogtashuaajvzdaigt.supabase.co/functions/v1/rapid-task';
+
 async function generateQuiz(n){
   const area = document.getElementById('quizArea');
   const btn = document.getElementById('quizGenBtn');
@@ -1520,35 +1523,23 @@ async function generateQuiz(n){
   btn.style.display = 'none';
   area.innerHTML = `<div class="quiz-loading"><i class="fas fa-spinner fa-spin"></i> Generating your quiz with AI...</div>`;
 
-  // Build a source-grounded prompt. If we have the station text, base questions on it.
+  // The prompt lives inside the Edge Function; the site just sends the source material.
   const sourceText = body ? stripHtml(body).slice(0, 6000)
-    : `A UK PLAB 2 / UKMLA OSCE station titled "${title}".`;
-
-  const prompt = `You are an expert PLAB 2 / UKMLA OSCE examiner. Based ONLY on the following station material, write 4 multiple-choice questions that test a candidate's understanding of the key clinical and communication points.
-
-STATION MATERIAL:
-${sourceText}
-
-Return ONLY valid JSON (no markdown, no backticks) in exactly this shape:
-{"questions":[{"q":"question text","options":["A","B","C","D"],"correct":0,"explain":"why the correct answer is right"}]}
-- "correct" is the 0-based index of the correct option.
-- Make distractors plausible and similar in length.
-- Keep each question focused on high-yield exam points.`;
+    : `A UK PLAB 2 / UKMLA OSCE station titled "${title}". Write questions on the high-yield clinical and communication points a candidate must know for this topic.`;
 
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetch(QUIZ_FUNCTION_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1500,
-        messages: [{ role: "user", content: prompt }]
-      })
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + SUPABASE_ANON_KEY
+      },
+      body: JSON.stringify({ sourceText, title })
     });
-    const data = await response.json();
-    let text = (data.content || []).map(b => b.text || '').join('').trim();
+    let text = await response.text();
     text = text.replace(/```json/gi,'').replace(/```/g,'').trim();
     const quiz = JSON.parse(text);
+    if(!quiz.questions || !quiz.questions.length) throw new Error('No questions returned');
     currentQuiz = quiz.questions;
     quizAnswers = {};
     renderQuiz(n);
