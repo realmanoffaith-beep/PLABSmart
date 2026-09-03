@@ -1394,46 +1394,66 @@ function updateLibrary(){
 /* ═══════════════ COURSE PLATFORM (Cengage-style, one section at a time) ═══════════════ */
 let currentStationNum = null;
 
-// Ordered flat list of all station numbers (in chapter order) for sequential unlocking
+// Ordered flat list of all station numbers (kept for next-station navigation)
 function orderedStationNums(){
   const nums = [];
   COURSE_DATA.chapters.forEach(ch => ch.stations.forEach(n => nums.push(n)));
   return nums;
 }
 
-// Progress = highest station index the user has completed. Stored per-user in localStorage.
-function progressKey(){ return 'plab_progress_' + (currentUser ? currentUser.id : 'guest'); }
-function getProgress(){
-  try { return parseInt(localStorage.getItem(progressKey()) || '0', 10) || 0; }
-  catch(e){ return 0; }
-}
-function setProgress(idx){
-  try { localStorage.setItem(progressKey(), String(idx)); } catch(e){}
+// Find which chapter a station belongs to, and its position within that chapter
+function chapterOf(stationNum){
+  for(const ch of COURSE_DATA.chapters){
+    const pos = ch.stations.indexOf(stationNum);
+    if(pos !== -1) return { chapter: ch, pos };
+  }
+  return null;
 }
 
-// A station is unlocked if its position <= progress+1 (i.e. next-in-line or already done)
+// Per-chapter progress: we store how many stations are completed in EACH chapter.
+// Progress is an object like { "Emergencies & Acute Presentations": 2, "Dermatology": 0, ... }
+function progressKey(){ return 'plab_progress_v2_' + (currentUser ? currentUser.id : 'guest'); }
+function getProgress(){
+  try {
+    const raw = localStorage.getItem(progressKey());
+    return raw ? JSON.parse(raw) : {};
+  } catch(e){ return {}; }
+}
+function setProgress(obj){
+  try { localStorage.setItem(progressKey(), JSON.stringify(obj)); } catch(e){}
+}
+function getChapterDone(chapterName){
+  const p = getProgress();
+  return p[chapterName] || 0;
+}
+function setChapterDone(chapterName, count){
+  const p = getProgress();
+  if((p[chapterName] || 0) < count) p[chapterName] = count; // only ever advance
+  setProgress(p);
+}
+
+// A station is unlocked if it's the next-in-line (or earlier) WITHIN ITS OWN CHAPTER.
+// So every chapter's first station is open from the start.
 function isStationUnlocked(stationNum){
-  const order = orderedStationNums();
-  const pos = order.indexOf(stationNum);
-  return pos <= getProgress(); // progress starts at 0 = first station unlocked
+  const info = chapterOf(stationNum);
+  if(!info) return false;
+  return info.pos <= getChapterDone(info.chapter.name);
 }
 function isStationDone(stationNum){
-  const order = orderedStationNums();
-  const pos = order.indexOf(stationNum);
-  return pos < getProgress();
+  const info = chapterOf(stationNum);
+  if(!info) return false;
+  return info.pos < getChapterDone(info.chapter.name);
 }
 
 function renderCourseSidebar(){
   const sb = document.getElementById('courseSidebar');
   if(!sb) return;
-  const order = orderedStationNums();
-  const progress = getProgress();
 
   sb.innerHTML = COURSE_DATA.chapters.map((ch, ci) => {
-    const stationsHtml = ch.stations.map(n => {
-      const pos = order.indexOf(n);
-      const unlocked = pos <= progress;
-      const done = pos < progress;
+    const chapterDone = getChapterDone(ch.name);
+    const stationsHtml = ch.stations.map((n, posInCh) => {
+      const unlocked = posInCh <= chapterDone;
+      const done = posInCh < chapterDone;
       const isCurrent = (n === currentStationNum);
       let statusIcon;
       if(done) statusIcon = '<span class="station-status done"><i class="fas fa-check"></i></span>';
@@ -1447,13 +1467,12 @@ function renderCourseSidebar(){
     // Open the chapter that contains the current station, else first chapter
     const containsCurrent = ch.stations.includes(currentStationNum);
     const openCls = (containsCurrent || (currentStationNum === null && ci === 0)) ? ' open' : '';
-    const doneCount = ch.stations.filter(n => order.indexOf(n) < progress).length;
     return `
       <div class="chapter${openCls}">
         <div class="chapter-head" onclick="this.parentElement.classList.toggle('open')">
           <span class="chapter-icon">${ch.icon}</span>
           <span class="chapter-title">${ch.name}</span>
-          <span class="chapter-count">${doneCount}/${ch.stations.length}</span>
+          <span class="chapter-count">${chapterDone}/${ch.stations.length}</span>
           <span class="chapter-caret"><i class="fas fa-chevron-right"></i></span>
         </div>
         <div class="chapter-stations">${stationsHtml}</div>
@@ -1463,7 +1482,7 @@ function renderCourseSidebar(){
 
 function openStation(n){
   if(!isStationUnlocked(n)){
-    showToast('Complete the previous station first', 'fas fa-lock');
+    showToast('Finish the previous station in this chapter first', 'fas fa-lock');
     return;
   }
   currentStationNum = n;
@@ -1599,12 +1618,13 @@ function showQuizResult(n){
   const pct = Math.round((correct/total)*100);
   const passed = correct >= Math.ceil(total * 0.5); // 50% to pass
 
-  const order = orderedStationNums();
-  const pos = order.indexOf(n);
-  const isLast = pos === order.length - 1;
+  const info = chapterOf(n);
+  const posInCh = info ? info.pos : 0;
+  const chapterLen = info ? info.chapter.stations.length : 1;
+  const isLastInChapter = posInCh === chapterLen - 1;
 
-  if(passed && pos >= getProgress()){
-    setProgress(pos + 1); // unlock next
+  if(passed && info && posInCh >= getChapterDone(info.chapter.name)){
+    setChapterDone(info.chapter.name, posInCh + 1); // unlock next station in this chapter
   }
 
   const area = document.getElementById('quizResultArea');
@@ -1612,21 +1632,22 @@ function showQuizResult(n){
     <div class="quiz-result">
       <div class="quiz-result-score">${correct}/${total}</div>
       <p>${passed
-        ? (isLast ? '🎉 Passed! You\'ve completed the final station in the course.' : '🎉 Passed! The next station is now unlocked.')
+        ? (isLastInChapter
+            ? '🎉 Passed! You\'ve completed every station in this chapter. Pick another chapter to keep going.'
+            : '🎉 Passed! The next station in this chapter is now unlocked.')
         : `You scored ${pct}%. You need 50% to unlock the next station — review the material and try again.`}</p>
       <div class="quiz-actions">
         <button class="btn btn-ghost" onclick="openStation(${n})">Retake quiz</button>
-        ${(passed && !isLast) ? `<button class="btn btn-electric" onclick="goToNextStation(${n})">Next station →</button>` : ''}
+        ${(passed && !isLastInChapter) ? `<button class="btn btn-electric" onclick="goToNextStation(${n})">Next station</button>` : ''}
       </div>
     </div>`;
   renderCourseSidebar();
 }
 
 function goToNextStation(n){
-  const order = orderedStationNums();
-  const pos = order.indexOf(n);
-  if(pos < order.length - 1){
-    openStation(order[pos + 1]);
+  const info = chapterOf(n);
+  if(info && info.pos < info.chapter.stations.length - 1){
+    openStation(info.chapter.stations[info.pos + 1]);
   }
 }
 
