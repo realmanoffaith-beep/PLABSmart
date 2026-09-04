@@ -1095,7 +1095,7 @@ footer ul li a:hover{color:#fff}
           <li>Domain-by-domain scoring</li>
           <li>Progress tracking</li>
         </ul>
-        <a onclick="openAuth('signup')" class="btn btn-outline">Get 3 months</a>
+        <a onclick="goToCheckout('3month')" class="btn btn-outline">Get 3 months</a>
       </div>
       <div class="price-card featured">
         <div class="price-tag">Best Value</div>
@@ -1110,7 +1110,7 @@ footer ul li a:hover{color:#fff}
           <li>Progress analytics dashboard</li>
           <li>Timed exam mode</li>
         </ul>
-        <a onclick="openAuth('signup')" class="btn btn-electric">Get 6 months</a>
+        <a onclick="goToCheckout('6month')" class="btn btn-electric">Get 6 months</a>
       </div>
       <div class="price-card">
         <div class="price-tier">1 Year</div>
@@ -1124,7 +1124,7 @@ footer ul li a:hover{color:#fff}
           <li>PDF performance reports</li>
           <li>Best price per month</li>
         </ul>
-        <a onclick="openAuth('signup')" class="btn btn-outline">Get 1 year</a>
+        <a onclick="goToCheckout('1year')" class="btn btn-outline">Get 1 year</a>
       </div>
     </div>
     <p class="pricing-note reveal">🔒 Secure checkout · One-time payment, no auto-renewal · Instant access to all 100 stations</p>
@@ -1684,6 +1684,33 @@ function comingSoon(feature){
   showToast(`${feature} is coming soon — try the live demo below!`, 'fas fa-rocket');
 }
 
+/* ─── STRIPE CHECKOUT ─── */
+// Stripe Payment Links (TEST mode). Swap for live links when going live.
+const STRIPE_LINKS = {
+  '3month': 'https://buy.stripe.com/test_cNi9AM9kA069cAZ6eZfrW00',
+  '6month': 'https://buy.stripe.com/test_7sYaEQ54kf136cB6eZfrW01',
+  '1year':  'https://buy.stripe.com/test_6oUfZa68o2eh8kJ8n7frW02'
+};
+
+function goToCheckout(plan){
+  const link = STRIPE_LINKS[plan];
+  if(!link) return;
+
+  // Require sign-in first, so payment can be matched to their account
+  if(!currentUser){
+    showToast('Please create an account or log in first, then choose your plan', 'fas fa-user');
+    openAuth('signup');
+    return;
+  }
+
+  // Pre-fill the customer's email on the Stripe checkout so the payment
+  // is tied to the same email as their account (makes unlocking easy).
+  const url = link + (link.includes('?') ? '&' : '?') +
+              'prefilled_email=' + encodeURIComponent(currentUser.email || '');
+  window.open(url, '_blank');
+  showToast('Opening secure checkout...', 'fas fa-lock');
+}
+
 /* ─── AUTH MODAL ─── */
 function openAuth(mode = 'login'){
   closeMob();
@@ -1795,9 +1822,17 @@ async function socialAuth(provider){
   message.textContent = `Redirecting to ${provider}...`;
 
   try {
+    const oauthOptions = {
+      redirectTo: window.location.origin + window.location.pathname
+    };
+    // Force Google to always show the account chooser, so users can switch
+    // accounts instead of being auto-logged into the same one.
+    if(supaProvider === 'google'){
+      oauthOptions.queryParams = { prompt: 'select_account' };
+    }
     const { error } = await supabaseClient.auth.signInWithOAuth({
       provider: supaProvider,
-      options: { redirectTo: window.location.origin + window.location.pathname }
+      options: oauthOptions
     });
     if(error) throw error;
     // Browser redirects to the provider; on return, Supabase restores the session
