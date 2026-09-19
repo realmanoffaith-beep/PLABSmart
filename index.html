@@ -1448,6 +1448,39 @@ function setChapterDone(chapterName, count){
   setProgress(p);
 }
 
+/* ─── USAGE LIMIT: max stations started per rolling hour ─── */
+const STATIONS_PER_HOUR = 7;
+const HOUR_MS = 60 * 60 * 1000;
+
+function usageKey(){ return 'plab_usage_' + (currentUser ? currentUser.id : 'guest'); }
+
+function getRecentStarts(){
+  // Returns array of timestamps (ms) from the last hour
+  try {
+    const raw = localStorage.getItem(usageKey());
+    const arr = raw ? JSON.parse(raw) : [];
+    const cutoff = Date.now() - HOUR_MS;
+    return arr.filter(t => t > cutoff);
+  } catch(e){ return []; }
+}
+
+function recordStationStart(){
+  const arr = getRecentStarts();
+  arr.push(Date.now());
+  try { localStorage.setItem(usageKey(), JSON.stringify(arr)); } catch(e){}
+}
+
+// Returns { allowed: true } or { allowed: false, minutesLeft: N }
+function checkUsageLimit(){
+  const arr = getRecentStarts();
+  if(arr.length < STATIONS_PER_HOUR) return { allowed: true, remaining: STATIONS_PER_HOUR - arr.length };
+  // Oldest start in the window determines when a slot frees up
+  const oldest = Math.min(...arr);
+  const freesAt = oldest + HOUR_MS;
+  const minutesLeft = Math.max(1, Math.ceil((freesAt - Date.now()) / 60000));
+  return { allowed: false, minutesLeft };
+}
+
 // A station is unlocked if it's the next-in-line (or earlier) WITHIN ITS OWN CHAPTER.
 // So every chapter's first station is open from the start.
 function isStationUnlocked(stationNum){
@@ -1501,6 +1534,20 @@ function openStation(n){
     showToast('Finish the previous station in this chapter first', 'fas fa-lock');
     return;
   }
+
+  // Usage limit: only NEW stations (not already completed, not the one already open) count.
+  // Re-reading a completed station is always free.
+  const alreadyDone = isStationDone(n);
+  const alreadyOpen = (n === currentStationNum);
+  if(!alreadyDone && !alreadyOpen){
+    const usage = checkUsageLimit();
+    if(!usage.allowed){
+      showLimitInReader(n, usage.minutesLeft);
+      return;
+    }
+    recordStationStart();
+  }
+
   currentStationNum = n;
   renderCourseSidebar();
   const empty = document.getElementById('readerEmpty');
@@ -1540,6 +1587,24 @@ function openStation(n){
   }
   // Scroll reader into view on mobile
   document.getElementById('courseReader').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+function showLimitInReader(n, minutesLeft){
+  const empty = document.getElementById('readerEmpty');
+  const content = document.getElementById('readerContent');
+  empty.style.display = 'none';
+  content.style.display = 'block';
+  content.innerHTML = `
+    <div class="reader-eyebrow">Take a breather</div>
+    <h2 class="reader-title">You've hit your hourly limit</h2>
+    <div class="reader-comingsoon">
+      <strong>⏳ ${STATIONS_PER_HOUR} stations per hour keeps your learning sharp.</strong><br><br>
+      Spaced practice helps you actually remember what you learn — cramming all 100 in one sitting doesn't stick. Your next new station unlocks in about <strong>${minutesLeft} minute${minutesLeft>1?'s':''}</strong>.
+      <br><br>
+      You can still <strong>re-read and re-quiz any station you've already completed</strong> for free while you wait.
+    </div>`;
+  document.getElementById('courseReader').scrollIntoView({ behavior:'smooth', block:'start' });
+  showToast(`Hourly limit reached — new stations in ~${minutesLeft} min`, 'fas fa-hourglass-half');
 }
 
 /* ─── AI QUIZ (via Claude API) ─── */
